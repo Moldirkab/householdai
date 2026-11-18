@@ -69,7 +69,7 @@ export default function Budget() {
                     <span className={`chip ${st}`}>{!plan ? "No plan" : spent > plan ? `Over by ${money(spent - plan, cur)}` : `${money(plan - spent, cur)} left`}</span></div>
                   <Meter value={spent} plan={plan} color={statusColor(st)} />
                   <div className="small-muted">Spent <b>{money(spent, cur)}</b> of {money(plan, cur)}</div>
-                  <label className="planedit" htmlFor={`b-${c}`}>Monthly limit
+                  <label className="planedit" htmlFor={`b-${c}`}>Monthly limit ({household.currency})
                     <input id={`b-${c}`} type="number" min="0" step="10" value={draft[c]} disabled={!canEdit}
                       onChange={(e) => setDraft({ ...draft, [c]: e.target.value })} />
                     {p.suggested && p.amount !== null && <span className="chip none">suggested from last 3 months</span>}

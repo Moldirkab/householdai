@@ -31,7 +31,7 @@ export default function Dashboard() {
       <header className="page">
         <div><div className="eyebrow">{monthLabel(month)}</div><h1>{household.name}</h1>
           <div className="sub">Your role: {household.my_role}</div></div>
-        <div className="row">{household.data_source !== "bls" && <Link className="btn" to="/expenses">+ Add expense</Link>}<Link className="btn" to="/forecast">Open forecast →</Link></div>
+        <div className="row">{household.my_role !== "viewer" && <Link className="btn" to="/expenses">+ Add expense</Link>}<Link className="btn" to="/forecast">Open forecast →</Link></div>
       </header>
       <ErrorBox error={error} />
       {sum && (

@@ -8,7 +8,7 @@ const empty = (meId) => ({ amount: "", category: "Food", spent_on: today(), note
 export default function Expenses() {
   const { me, household, hid } = useApp();
   const cur = household.currency;
-  const canWrite = household.my_role !== "viewer" && household.data_source !== "bls";
+  const canWrite = household.my_role !== "viewer";
   const { refreshHousehold } = useApp();
   const [month, setMonth] = useState(household.latest_month || thisMonth());
   const [cat, setCat] = useState("");

@@ -66,8 +66,10 @@ function Main() {
       <div className="wrap" style={{ paddingBottom: 0 }}>
         <div className="note" role="note"><b>Demo household with real research data.</b> All expenses are the real BLS Consumer
           Expenditure Survey values from the research dataset: weighted average monthly spending per U.S. household,
-          {" "}{household.first_month} to {household.latest_month}, in USD. They are not the personal spending of anyone in this
-          household and cannot be edited. Create your own household to track your own expenses.</div>
+          {" "}{household.first_month} to {household.latest_month}, {household.currency === "$" ? "in USD" : <>originally in USD and converted to {household.currency} at
+          the exchange rate on the day the currency was changed (see Activity)</>}. They are not the personal spending of anyone in this
+          household and cannot be edited. You can add your own expenses here to try the app; they are kept next to the
+          dataset records and are included in summaries and forecasts.</div>
       </div>
     )}
     <Routes>

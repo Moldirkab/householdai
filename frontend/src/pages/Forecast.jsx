@@ -122,7 +122,7 @@ export default function Forecast() {
                   <span className="eyebrow">Recommendation{recs ? (recs.source === "llm" ? " · AI generated" : " · rule-based") : ""}</span>
                   {recs ? recs.items[c.category] : <span className="sub">Generating…</span>}
                 </div>
-                <PlanEdit key={`${month}-${c.category}-${c.plan}`} id={`plan-${c.category}`} value={c.plan} disabled={!canEdit}
+                <PlanEdit cur={household.currency} key={`${month}-${c.category}-${c.plan}`} id={`plan-${c.category}`} value={c.plan} disabled={!canEdit}
                   onSave={(v) => savePlan(c.category, v)} />
                 {revealed && c.actual !== null && (
                   <div className="small-muted">Actual: <b>{money(c.actual, cur)}</b> · forecast error {money(c.actual - c.forecast, cur)}</div>
@@ -157,10 +157,10 @@ export default function Forecast() {
   );
 }
 
-function PlanEdit({ id, value, disabled, onSave }) {
+function PlanEdit({ id, value, disabled, onSave, cur }) {
   const [v, setV] = useState(value ?? "");
   return (
-    <label className="planedit" htmlFor={id}>Adjust shared plan
+    <label className="planedit" htmlFor={id}>Adjust shared plan ({cur})
       <input id={id} type="number" min="0" step="10" value={v} disabled={disabled}
         onChange={(e) => setV(e.target.value)}
         onBlur={() => { if (String(v) !== String(value ?? "") && v !== "") onSave(v); }}

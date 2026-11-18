@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from . import rates as fx
 from . import recommend
 from .db import get_db
 from .forecast import household_forecast, month_add
@@ -58,6 +59,17 @@ def round_plan(v: float, cur: str) -> float:
     return float(math.ceil(v / step) * step) if v > 0 else 0.0
 
 
+def household_window(db: Session, hid: int, monthly: pd.DataFrame) -> dict:
+    """Data window of a household. In a demo (BLS) household it stays on the dataset months, so expenses that
+    members add (for example dated today) do not move the forecast month or open a gap after the dataset."""
+    cap = None
+    if db.get(Household, hid).data_source == "bls":
+        last = db.query(func.max(Expense.spent_on)).filter(
+            Expense.household_id == hid, Expense.created_by.is_(None), Expense.paid_by.is_(None)).scalar()
+        cap = str(last)[:7] if last else None
+    return data_window(monthly, cap)
+
+
 def monthly_spending(db: Session, hid: int) -> pd.DataFrame:
     rows = db.query(Expense.spent_on, Expense.category, Expense.amount).filter_by(household_id=hid).all()
     if not rows:
@@ -68,11 +80,12 @@ def monthly_spending(db: Session, hid: int) -> pd.DataFrame:
         columns=CATEGORIES, fill_value=0.0).sort_index()
 
 
-def data_window(monthly: pd.DataFrame) -> dict:
-    """Months with data. Only completed months count: the current calendar month is never used as history."""
+def data_window(monthly: pd.DataFrame, cap: str | None = None) -> dict:
+    """Months with data. Only completed months count: the current calendar month is never used as history.
+    `cap` fixes the last data month (demo households: the dataset's last month, whatever members add later)."""
     if not len(monthly):
         return {"first_month": None, "latest_month": None, "forecast_month": this_month()}
-    latest = min(monthly.index.max(), month_add(this_month(), -1))
+    latest = min(monthly.index.max(), month_add(this_month(), -1), cap or "9999-12")
     if latest < monthly.index.min():
         return {"first_month": monthly.index.min(), "latest_month": None, "forecast_month": this_month()}
     return {"first_month": monthly.index.min(), "latest_month": latest, "forecast_month": month_add(latest, 1)}
@@ -152,6 +165,15 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     return me_payload(db, user)
 
 
+@router.get("/rates")
+def exchange_rates(user: User = Depends(current_user)):
+    """Today's exchange rates (USD base) for showing amounts in another currency."""
+    try:
+        return fx.get_rates()
+    except RuntimeError:
+        raise HTTPException(503, "Exchange rates are unavailable right now. Try again later.")
+
+
 @router.delete("/me")
 def delete_me(user: User = Depends(current_user), db: Session = Depends(get_db)):
     for m in db.query(Membership).filter_by(user_id=user.id).all():
@@ -227,12 +249,35 @@ def get_household(hid: int, user: User = Depends(current_user), db: Session = De
     return {"id": h.id, "name": h.name, "currency": h.currency, "my_role": m.role, "data_source": h.data_source,
             "invite_code": h.invite_code if m.role in WRITE_ROLES else None,
             "members": member_list(db, hid), "categories": CATEGORIES, "this_month": this_month(),
-            **data_window(monthly_spending(db, hid))}
+            **household_window(db, hid, monthly_spending(db, hid))}
 
 
 class HouseholdPatch(BaseModel):
     name: str | None = None
     currency: str | None = None
+
+
+def convert_household_currency(db: Session, h: Household, new_cur: str, user: User) -> None:
+    """Switch the household currency and convert every stored amount with today's exchange rate,
+    so existing expenses and plans keep their value and new entries are saved in the new currency."""
+    codes = fx.SYMBOL_TO_CODE
+    if new_cur not in codes or h.currency not in codes:
+        raise HTTPException(422, f"Currency must be one of: {', '.join(codes)}.")
+    try:
+        r = fx.get_rates()
+    except RuntimeError:
+        raise HTTPException(503, "Exchange rates are unavailable right now, so amounts cannot be converted. Try again later.")
+    old_cur = h.currency
+    factor = r["rates"][codes[new_cur]] / r["rates"][codes[old_cur]]
+    for model in (Expense, Budget):
+        for row in db.query(model).filter_by(household_id=h.id).all():
+            row.amount = round(row.amount * factor, 2)
+    db.query(RecommendationCache).filter_by(household_id=h.id).delete()  # cached advice quotes old amounts
+    h.currency = new_cur
+    one = factor if factor >= 1 else 1 / factor
+    pair = f"1 {old_cur} = {one:,.4g} {new_cur}" if factor >= 1 else f"1 {new_cur} = {one:,.4g} {old_cur}"
+    log(db, h.id, user.id, f"{user.name} changed the currency from {old_cur} to {new_cur}; all amounts converted at "
+                           f"{pair} (rates of {r['date']}, {r['source']})")
 
 
 @router.patch("/households/{hid}")
@@ -242,8 +287,9 @@ def patch_household(hid: int, body: HouseholdPatch, user: User = Depends(current
     h = db.get(Household, hid)
     if body.name:
         h.name = body.name.strip()
-    if body.currency:
-        h.currency = body.currency.strip()
+    new_cur = (body.currency or "").strip()
+    if new_cur and new_cur != h.currency:
+        convert_household_currency(db, h, new_cur, user)
     log(db, hid, user.id, f"{user.name} updated household settings")
     db.commit()
     return {"ok": True}
@@ -345,8 +391,6 @@ def _check_payer(db: Session, hid: int, uid: int | None) -> None:
 def add_expense(hid: int, body: ExpenseIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     m = membership_or_404(db, hid, user)
     require_role(m, WRITE_ROLES, "add expenses")
-    if db.get(Household, hid).data_source == "bls":
-        raise HTTPException(403, "This demo household contains only real BLS data. Create your own household to add expenses.")
     payer = body.paid_by or user.id
     _check_payer(db, hid, payer)
     e = Expense(household_id=hid, paid_by=payer, created_by=user.id, category=body.category, amount=body.amount,
@@ -469,7 +513,7 @@ _forecast_cache: dict[tuple, dict] = {}
 
 def compute_forecast(db: Session, hid: int, month: str) -> dict:
     monthly = monthly_spending(db, hid)
-    win = data_window(monthly)
+    win = household_window(db, hid, monthly)
     if win["latest_month"] and month > win["forecast_month"]:
         raise HTTPException(422, f"Forecasts are available up to {win['forecast_month']} "
                                  f"(data up to the last completed month, {win['latest_month']}).")
@@ -490,7 +534,7 @@ def get_forecast(hid: int, month: str, user: User = Depends(current_user), db: S
     fc = compute_forecast(db, hid, month)
     monthly = monthly_spending(db, hid)
     plans = plans_for(db, hid, month, monthly, cur)
-    win = data_window(monthly)
+    win = household_window(db, hid, monthly)
     complete = bool(win["latest_month"]) and month <= win["latest_month"]
     actual = monthly.loc[month].to_dict() if month in monthly.index else None
     for c in fc["categories"]:

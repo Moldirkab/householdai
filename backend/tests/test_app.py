@@ -172,18 +172,26 @@ def test_ft10_demo_household_real_bls_data(client):
     s = client.get(f"/api/households/{h.id}/summary/2024-03", headers=tok).json()["spent"]
     for c in ["Food", "Housing", "Utilities", "Transportation", "Healthcare", "Entertainment", "Other"]:
         assert abs(s[c] - bls.loc["2024-03-01", c]) < 0.02
-    # dataset records are read-only; no expenses can be added to the demo household
+    # dataset records are read-only; members can still add their own expenses next to them
     row = client.get(f"/api/households/{h.id}/expenses", params={"month": "2024-03"}, headers=tok).json()[0]
     assert row["dataset_record"] and row["paid_by_name"] == "BLS dataset"
     assert client.delete(f"/api/households/{h.id}/expenses/{row['id']}", headers=tok).status_code == 403
-    assert client.post(f"/api/households/{h.id}/expenses", headers=tok,
-                       json={"category": "Food", "amount": 1, "spent_on": "2024-12-01"}).status_code == 403
+    assert client.put(f"/api/households/{h.id}/expenses/{row['id']}", headers=tok,
+                      json={"category": "Food", "amount": 1, "spent_on": "2024-03-01"}).status_code == 403
     fc = client.get(f"/api/households/{h.id}/forecast/2025-01", headers=tok).json()
     for c in fc["categories"]:
         fam = BEST_MODEL[c["category"]][0]
         assert c["model"] == fam and c["confidence"] == "normal"
         assert c["method"].startswith(fam)                                  # the model itself, not a fallback
     assert client.get(f"/api/households/{h.id}/forecast/2025-02", headers=tok).status_code == 422
+    # members can add their own expenses to the demo household (after the checks above, so they stay exact)
+    r = client.post(f"/api/households/{h.id}/expenses", headers=tok, json={"category": "Food", "amount": 12.5, "spent_on": "2025-01-05"})
+    assert r.status_code == 200 and not r.json()["dataset_record"]
+    # an expense dated after the dataset does not move the demo's forecast month
+    assert client.post(f"/api/households/{h.id}/expenses", headers=tok,
+                       json={"category": "Food", "amount": 30, "spent_on": "2025-06-10"}).status_code == 200
+    info = client.get(f"/api/households/{h.id}", headers=tok).json()
+    assert info["latest_month"] == "2024-12" and info["forecast_month"] == "2025-01"
 
 
 # FT-12 The app reproduces the research evaluation: 2024 one-step RMSE close to Assignment 3, Table V (best model per category)
@@ -245,3 +253,74 @@ def test_ft14_length_limits(client, house):
     assert client.put(f"/api/households/{h2}/budgets/{THIS}", json={"amounts": plan}, headers=long_name).status_code == 200
     for bad in ("0000-01", "9999-12"):
         assert client.get(f"/api/households/{h2}/summary/{bad}", headers=long_name).status_code == 422
+
+
+def test_ft15_exchange_rates(client, monkeypatch):
+    from app import rates as fx
+    monkeypatch.setattr(fx, "_cache", None)
+    monkeypatch.setattr(fx, "_from_open_er_api", lambda c: {"rates": {"KZT": 500.0, "USD": 1.0, "EUR": 0.9, "RUB": 90.0},
+                                                            "date": "2026-11-18", "source": "test"})
+    h = register(client, "Rates")
+    assert client.get("/api/rates").status_code == 401
+    r = client.get("/api/rates", headers=h)
+    assert r.status_code == 200
+    d = r.json()
+    assert d["base"] == "USD" and d["rates"]["KZT"] == 500.0 and d["symbols"]["₸"] == "KZT" and not d["stale"]
+
+    def boom(c):
+        raise RuntimeError("down")
+    monkeypatch.setattr(fx, "_from_open_er_api", boom)
+    monkeypatch.setattr(fx, "_from_currency_api", boom)
+    monkeypatch.setattr(fx, "_cache", {"fetched_on": date(2000, 1, 1), "payload": d})
+    assert client.get("/api/rates", headers=h).json()["stale"] is True
+    monkeypatch.setattr(fx, "_cache", None)
+    assert client.get("/api/rates", headers=h).status_code == 503
+
+
+def test_ft16_currency_change_converts_amounts(client, monkeypatch):
+    from app import rates as fx
+    monkeypatch.setattr(fx, "_cache", None)
+    monkeypatch.setattr(fx, "_from_open_er_api", lambda c: {"rates": {"KZT": 500.0, "USD": 1.0, "EUR": 0.9, "RUB": 90.0},
+                                                            "date": "2026-11-18", "source": "test"})
+    o = register(client, "Converter")
+    hid = client.post("/api/households", json={"name": "Dollar home", "currency": "$"}, headers=o).json()["id"]
+    client.post(f"/api/households/{hid}/expenses", headers=o, json={"category": "Food", "amount": 100, "spent_on": f"{PREV}-05"})
+    client.put(f"/api/households/{hid}/budgets/{PREV}", headers=o, json={"amounts": {"Food": 150}})
+
+    assert client.patch(f"/api/households/{hid}", json={"currency": "₸"}, headers=o).status_code == 200
+    assert client.get(f"/api/households/{hid}", headers=o).json()["currency"] == "₸"
+    assert client.get(f"/api/households/{hid}/expenses", params={"month": PREV}, headers=o).json()[0]["amount"] == 50000
+    assert client.get(f"/api/households/{hid}/budgets/{PREV}", headers=o).json()["plans"]["Food"]["amount"] == 75000
+    # a new entry is saved as typed, in the new currency
+    client.post(f"/api/households/{hid}/expenses", headers=o, json={"category": "Food", "amount": 2000, "spent_on": f"{PREV}-06"})
+    assert sorted(e["amount"] for e in client.get(f"/api/households/{hid}/expenses", params={"month": PREV}, headers=o).json()) == [2000, 50000]
+
+    assert client.patch(f"/api/households/{hid}", json={"currency": "€"}, headers=o).status_code == 200
+    assert sorted(e["amount"] for e in client.get(f"/api/households/{hid}/expenses", params={"month": PREV}, headers=o).json()) == [3.6, 90]
+    assert client.patch(f"/api/households/{hid}", json={"currency": "XYZ"}, headers=o).status_code == 422
+
+    def boom(c):
+        raise RuntimeError("down")
+    monkeypatch.setattr(fx, "_cache", None)
+    monkeypatch.setattr(fx, "_from_open_er_api", boom)
+    monkeypatch.setattr(fx, "_from_currency_api", boom)
+    assert client.patch(f"/api/households/{hid}", json={"currency": "$"}, headers=o).status_code == 503
+    assert client.get(f"/api/households/{hid}", headers=o).json()["currency"] == "€"
+
+
+def test_ft17_demo_household_currency_change(client, monkeypatch):
+    from app import rates as fx
+    from app.db import SessionLocal
+    from app.seed import create_demo_household
+    monkeypatch.setattr(fx, "_cache", None)
+    monkeypatch.setattr(fx, "_from_open_er_api", lambda c: {"rates": {"KZT": 500.0, "USD": 1.0, "EUR": 0.9, "RUB": 90.0},
+                                                            "date": "2026-11-18", "source": "test"})
+    db = SessionLocal()
+    h = create_demo_household(db, 98)
+    db.close()
+    tok = {"Authorization": "Bearer " + client.post("/api/auth/login", json={"email": "g98.demo@demo.kz", "password": "demo1234"}).json()["token"]}
+    before = client.get(f"/api/households/{h.id}/summary/2024-03", headers=tok).json()["spent"]
+    assert client.patch(f"/api/households/{h.id}", json={"currency": "₸"}, headers=tok).status_code == 200
+    after = client.get(f"/api/households/{h.id}/summary/2024-03", headers=tok).json()["spent"]
+    for c, v in before.items():
+        assert abs(after[c] - v * 500) < 1

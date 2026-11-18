@@ -88,3 +88,24 @@ td.amt{font-family:var(--f-num);text-align:right;white-space:nowrap}
 .act time{color:var(--muted);font-size:12px;white-space:nowrap}
 @media (max-width:700px){.grid{grid-template-columns:1fr}.summary{grid-template-columns:1fr}.month{min-width:120px}}
 @media (prefers-reduced-motion:reduce){.meter .fill{transition:none}}
+
+/* modal */
+dialog.modal{border:1px solid var(--line);border-radius:16px;padding:0;background:var(--surface);color:var(--ink);
+  width:min(460px,calc(100vw - 32px));box-shadow:0 24px 60px rgba(10,30,28,.25)}
+dialog.modal::backdrop{background:rgba(12,24,22,.45);backdrop-filter:blur(3px)}
+dialog.modal[open]{animation:modal-in .18s ease-out}
+@keyframes modal-in{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){dialog.modal[open]{animation:none}}
+.modal-body{padding:22px 22px 18px;display:grid;gap:12px}
+.modal-body h2{font-size:19px}
+.modal-body p{margin:0}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.fx-hero{display:flex;align-items:center;gap:12px}
+.fx-sym{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;font-size:22px;font-weight:600;
+  background:var(--bg);border:1px solid var(--line);color:var(--muted)}
+.fx-sym.to{background:var(--accent-soft);border-color:transparent;color:var(--accent)}
+.fx-arrow{color:var(--muted);font-size:18px}
+.fx-rate{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;background:var(--bg);border-radius:12px;padding:12px 14px}
+.fx-pair{font-family:var(--f-num);font-size:15px;font-weight:500;font-variant-numeric:tabular-nums}
+.fx-list{margin:0;padding-left:18px;font-size:14px;display:grid;gap:2px}
+@media (max-width:480px){.fx-rate{grid-template-columns:1fr}}

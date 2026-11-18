@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, memberColor, setToken } from "../api.js";
+import { api, memberColor, money, setToken } from "../api.js";
 import { useApp } from "../App.jsx";
-import { ErrorBox } from "../components/ui.jsx";
+import { ErrorBox, Modal } from "../components/ui.jsx";
 
 export default function HouseholdPage() {
   const { me, household, hid, refreshHousehold, refreshMe, setMe } = useApp();
@@ -12,6 +12,39 @@ export default function HouseholdPage() {
   const [currency, setCurrency] = useState(household.currency);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
+  const [rates, setRates] = useState(null);
+  const changingCur = currency !== household.currency;
+  useEffect(() => {
+    if (changingCur && !rates) api("/rates").then(setRates).catch(() => setRates({ error: true }));
+  }, [changingCur]);  // eslint-disable-line
+  const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const conv = (() => {
+    if (!changingCur || !rates || rates.error) return null;
+    const factor = rates.rates[rates.symbols[currency]] / rates.rates[rates.symbols[household.currency]];
+    if (!(factor > 0)) return null;
+    const fmt = (v) => v.toLocaleString("en-US", { maximumFractionDigits: v >= 100 ? 2 : 4 });
+    const pair = factor >= 1 ? [household.currency, fmt(factor), currency] : [currency, fmt(1 / factor), household.currency];
+    const sample = household.currency === "₸" || household.currency === "₽" ? 10000 : 100;
+    return { factor, pair, sample, date: rates.date, source: rates.source, stale: rates.stale };
+  })();
+  const rateLine = !changingCur ? "" : !rates ? "Loading today's exchange rate…"
+    : rates.error ? "Exchange rates are unavailable right now, so the currency cannot be changed."
+    : conv ? `Today's rate: 1 ${conv.pair[0]} = ${conv.pair[1]} ${conv.pair[2]}. Saving converts all existing amounts.` : "";
+  const save = async (withCurrency) => {
+    setError(""); setMsg(""); setSaving(true);
+    try {
+      await api(`/households/${hid}`, { method: "PATCH", body: withCurrency ? { name, currency } : { name } });
+      setMsg(withCurrency ? `Settings saved. All amounts are now in ${currency}.` : "Settings saved.");
+      setConfirming(false); setRates(null);
+      await refreshMe(); await refreshHousehold();
+    } catch (e) { setError(e.message); setConfirming(false); }
+    finally { setSaving(false); }
+  };
+  const saveSettings = (e) => {
+    e.preventDefault();
+    if (changingCur) setConfirming(true); else save(false);
+  };
 
   const run = async (fn, ok) => {
     setError(""); setMsg("");
@@ -72,15 +105,48 @@ export default function HouseholdPage() {
       )}
 
       {owner && (
-        <form className="card" onSubmit={(e) => { e.preventDefault(); run(() => api(`/households/${hid}`, { method: "PATCH", body: { name, currency } }), "Settings saved."); }}>
+        <form className="card" onSubmit={saveSettings}>
           <h3>Settings</h3>
           <div className="row">
             <label className="field" htmlFor="sname">Household name<input id="sname" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field" htmlFor="scur">Currency<select id="scur" value={currency} onChange={(e) => setCurrency(e.target.value)}>
               <option value="₸">₸ Tenge</option><option value="$">$ US dollar</option><option value="€">€ Euro</option><option value="₽">₽ Ruble</option></select></label>
-            <button className="primary">Save</button>
+            <button className="primary" disabled={changingCur && (!rates || rates.error)}>Save</button>
           </div>
+          {rateLine && <p className="small-muted" role="status">{rateLine}</p>}
         </form>
+      )}
+
+      {owner && (
+        <Modal open={confirming && !!conv} onClose={() => !saving && setConfirming(false)} labelledBy="cur-title">
+          {conv && (<>
+            <div className="fx-hero" aria-hidden="true">
+              <span className="fx-sym">{household.currency}</span>
+              <span className="fx-arrow">→</span>
+              <span className="fx-sym to">{currency}</span>
+            </div>
+            <h2 id="cur-title">Switch the household to {currency}?</h2>
+            <p className="sub">Every saved expense and budget plan will be converted at today's exchange rate, so their value stays the same.</p>
+            <div className="fx-rate">
+              <div><div className="eyebrow">Today's rate</div>
+                <div className="fx-pair">1 {conv.pair[0]} = {conv.pair[1]} {conv.pair[2]}</div></div>
+              <div><div className="eyebrow">Example</div>
+                <div className="fx-pair">{money(conv.sample, household.currency)} → {money(conv.sample * conv.factor, currency)}</div></div>
+            </div>
+            <ul className="fx-list">
+              <li>All members see amounts in {currency} right away.</li>
+              <li>New expenses and plans are entered in {currency}.</li>
+              <li>The rate used is written to the Activity log.</li>
+            </ul>
+            <p className="sub">Rates of {conv.date} from {conv.source}{conv.stale ? " — today's update failed, these are the latest available" : ""}.
+              Converting back later uses that day's rate, so amounts may differ slightly.</p>
+            <div className="modal-actions">
+              <button type="button" onClick={() => setConfirming(false)} disabled={saving} autoFocus>Cancel</button>
+              <button type="button" className="primary" onClick={() => save(true)} disabled={saving}>
+                {saving ? "Converting…" : `Convert to ${currency}`}</button>
+            </div>
+          </>)}
+        </Modal>
       )}
 
       <div className="card">

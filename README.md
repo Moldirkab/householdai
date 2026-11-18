@@ -29,7 +29,8 @@ The app contains **no invented data**.
 | **Your own households** | Expenses that you and your members enter | Your forecasts |
 
 The demo household is labelled on every page as BLS data. It is **not** the personal spending of anyone in it, it has no
-fictional members, and its records cannot be edited. No budgets are pre-set: plans are suggested from the last three
+fictional members, and its dataset records cannot be edited or deleted. Members can add their own expenses to it to try
+the app; these are stored next to the dataset records and are included in its summaries and forecasts. No budgets are pre-set: plans are suggested from the last three
 months (and marked "suggested") until members save their own.
 
 ## Demo household and survey groups
@@ -115,7 +116,7 @@ In `backend` with the environment active: `python -m pytest -v`
 | FT-07 | Recommendations without an LLM key (rule-based), disclaimer, feedback |
 | FT-08 | Activity log records joins, expenses, plan and role changes |
 | FT-09 | **End-to-end:** a member adds an expense → forecast updates → the same recommendation reaches all members |
-| FT-10 | Demo household = research dataset exactly (Jan 2017 – Dec 2024), no fictional members, read-only; each category uses its best model |
+| FT-10 | Demo household = research dataset exactly (Jan 2017 – Dec 2024), no fictional members, dataset records read-only (own expenses can be added); each category uses its best model |
 | FT-11 | LLM reply is used; on failure the app falls back to rules |
 | FT-12 | App reproduces the research evaluation: 2024 RMSE per category within 15% of Table V |
 

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import { memberColor } from "../api.js";
 
 export function Meter({ value, plan, color }) {
@@ -39,4 +39,22 @@ export function MemberPills({ agreement, meId, canAgree, onToggle }) {
 
 export function ErrorBox({ error }) {
   return error ? <div className="error" role="alert">{error}</div> : null;
+}
+
+// Accessible modal built on the native <dialog>: focus stays inside, Esc and the backdrop close it.
+export function Modal({ open, onClose, labelledBy, children }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) d.showModal();
+    if (!open && d.open) d.close();
+  }, [open]);
+  return (
+    <dialog ref={ref} className="modal" aria-labelledby={labelledBy}
+      onCancel={(e) => { e.preventDefault(); onClose(); }}
+      onClick={(e) => { if (e.target === ref.current) onClose(); }}>
+      {open && <div className="modal-body">{children}</div>}
+    </dialog>
+  );
 }
